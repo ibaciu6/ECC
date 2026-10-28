@@ -21,6 +21,7 @@ const hooksPath = path.join(repoRoot, 'hooks', 'qoder-hooks.json');
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
 const releaseScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'release.sh'), 'utf8');
 const HOOK_TIMEOUT_BUFFER_MS = 5000;
+const CONTEXT_SENTINEL = 'QODER_SESSION_START_CONTEXT_SENTINEL';
 
 let passed = 0;
 let failed = 0;
@@ -35,6 +36,102 @@ function test(name, fn) {
     console.log(`    Error: ${error.message}`);
     failed += 1;
   }
+}
+
+function sessionStartHook() {
+  return JSON.parse(fs.readFileSync(hooksPath, 'utf8')).hooks.SessionStart[0].hooks[0];
+}
+
+// Launches the declared SessionStart hook from `pluginRoot` the way Qoder
+// does - exec form, no shell - inside a throwaway HOME and agent data dir so
+// the run cannot touch the real ECC install.
+function runSessionStartHook(pluginRoot) {
+  const hook = sessionStartHook();
+  const args = hook.args.map(value => value.replace('${QODER_PLUGIN_ROOT}', pluginRoot));
+  const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-qoder-hook-'));
+  const isolatedHome = path.join(isolatedRoot, 'home');
+  const isolatedCwd = path.join(isolatedRoot, 'project');
+  const agentDataHome = path.join(isolatedRoot, 'agent-data');
+  const learnedSkillsDir = path.join(agentDataHome, 'skills', 'learned');
+  fs.mkdirSync(learnedSkillsDir, { recursive: true });
+  fs.mkdirSync(isolatedCwd, { recursive: true });
+  fs.writeFileSync(
+    path.join(learnedSkillsDir, 'qoder-hook.md'),
+    `# Qoder Hook Verification\n\n## When to Use\n\n${CONTEXT_SENTINEL}\n`
+  );
+
+  const {
+    CLAUDE_PLUGIN_ROOT: _claudePluginRoot,
+    CLAUDE_CONFIG_DIR: _claudeConfigDir,
+    CLAUDE_SESSION_ID: _claudeSessionId,
+    ECC_PLUGIN_ROOT: _eccPluginRoot,
+    CODEX_PLUGIN_ROOT: _codexPluginRoot,
+    PLUGIN_ROOT: _pluginRoot,
+    ...baseEnv
+  } = process.env;
+
+  try {
+    const result = spawnSync(hook.command, args, {
+      cwd: isolatedCwd,
+      env: {
+        ...baseEnv,
+        HOME: isolatedHome,
+        USERPROFILE: isolatedHome,
+        ECC_AGENT_DATA_HOME: agentDataHome,
+        XDG_DATA_HOME: path.join(isolatedRoot, 'xdg-data'),
+        QODER_PLUGIN_ROOT: pluginRoot,
+        CLAUDE_PROJECT_DIR: isolatedCwd,
+        ECC_HOOKS_ENABLED: 'true',
+        ECC_HOOK_PROFILE: 'standard',
+        ECC_DISABLED_HOOKS: '',
+        ECC_DRY_RUN: '0',
+        ECC_SESSION_START_CONTEXT: 'on',
+        ECC_SESSION_START_MAX_CHARS: '8000',
+        ECC_SESSION_RETENTION_DAYS: '0',
+      },
+      input: JSON.stringify({
+        hook_event_name: 'SessionStart',
+        source: 'startup',
+        cwd: isolatedCwd,
+      }),
+      encoding: 'utf8',
+      timeout: hook.timeout * 1000 + HOOK_TIMEOUT_BUFFER_MS,
+      windowsHide: true,
+    });
+    return result;
+  } finally {
+    fs.rmSync(isolatedRoot, { recursive: true, force: true });
+  }
+}
+
+// A fixture with a node_modules ancestor would resolve dependencies from
+// there instead of exercising the installed copy, so verify isolation first.
+function assertNoNodeModulesInAncestry(dir) {
+  let current = dir;
+  while (true) {
+    if (fs.existsSync(path.join(current, 'node_modules'))) {
+      throw new Error(
+        `Fixture is not isolated: ${path.join(current, 'node_modules')} exists, so this test ` +
+        'would resolve dependencies from there instead of exercising the missing-dependency path.'
+      );
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+function assertSessionStartPayload(result) {
+  assert.ifError(result.error);
+  assert.strictEqual(result.signal, null);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.ok(result.stdout.trim(), 'Expected SessionStart to emit a payload');
+  const output = JSON.parse(result.stdout);
+  assert.strictEqual(output.hookSpecificOutput?.hookEventName, 'SessionStart');
+  assert.ok(
+    output.hookSpecificOutput?.additionalContext.includes(CONTEXT_SENTINEL),
+    'Expected the enabled Qoder hook to inject isolated SessionStart context'
+  );
 }
 
 console.log('\n=== Qoder native plugin ===\n');
@@ -106,73 +203,28 @@ if (fs.existsSync(manifestPath) && fs.existsSync(hooksPath)) {
   });
 
   test('declared Qoder SessionStart launcher executes from QODER_PLUGIN_ROOT', () => {
-    const hook = hooks.hooks.SessionStart[0].hooks[0];
-    const args = hook.args.map(value => value.replace('${QODER_PLUGIN_ROOT}', repoRoot));
-    const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-qoder-hook-'));
-    const isolatedHome = path.join(isolatedRoot, 'home');
-    const isolatedCwd = path.join(isolatedRoot, 'project');
-    const agentDataHome = path.join(isolatedRoot, 'agent-data');
-    const learnedSkillsDir = path.join(agentDataHome, 'skills', 'learned');
-    const contextSentinel = 'QODER_SESSION_START_CONTEXT_SENTINEL';
-    fs.mkdirSync(isolatedHome, { recursive: true });
-    fs.mkdirSync(isolatedCwd, { recursive: true });
-    fs.mkdirSync(learnedSkillsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(learnedSkillsDir, 'qoder-hook.md'),
-      `# Qoder Hook Verification\n\n## When to Use\n\n${contextSentinel}\n`
-    );
+    assertSessionStartPayload(runSessionStartHook(repoRoot));
+  });
 
-    const {
-      CLAUDE_PLUGIN_ROOT: _claudePluginRoot,
-      CLAUDE_CONFIG_DIR: _claudeConfigDir,
-      CLAUDE_SESSION_ID: _claudeSessionId,
-      ECC_PLUGIN_ROOT: _eccPluginRoot,
-      CODEX_PLUGIN_ROOT: _codexPluginRoot,
-      PLUGIN_ROOT: _pluginRoot,
-      ...baseEnv
-    } = process.env;
-
+  test('SessionStart still works in an installed copy without node_modules', () => {
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ecc-qoder-install-'));
     try {
-      const result = spawnSync(hook.command, args, {
-        cwd: isolatedCwd,
-        env: {
-          ...baseEnv,
-          HOME: isolatedHome,
-          USERPROFILE: isolatedHome,
-          ECC_AGENT_DATA_HOME: agentDataHome,
-          XDG_DATA_HOME: path.join(isolatedRoot, 'xdg-data'),
-          QODER_PLUGIN_ROOT: repoRoot,
-          CLAUDE_PROJECT_DIR: isolatedCwd,
-          ECC_HOOKS_ENABLED: 'true',
-          ECC_HOOK_PROFILE: 'standard',
-          ECC_DISABLED_HOOKS: '',
-          ECC_DRY_RUN: '0',
-          ECC_SESSION_START_CONTEXT: 'on',
-          ECC_SESSION_START_MAX_CHARS: '8000',
-          ECC_SESSION_RETENTION_DAYS: '0',
-        },
-        input: JSON.stringify({
-          hook_event_name: 'SessionStart',
-          source: 'startup',
-          cwd: isolatedCwd,
-        }),
-        encoding: 'utf8',
-        timeout: hook.timeout * 1000 + HOOK_TIMEOUT_BUFFER_MS,
-        windowsHide: true,
-      });
+      // Qoder installs a plugin by copying it into ~/.qoder/plugins/cache with
+      // .git and node_modules excluded, so production dependencies are absent
+      // in the copy. Only the directories the hook loads are copied here.
+      for (const entry of ['scripts', 'hooks', 'package.json']) {
+        fs.cpSync(path.join(repoRoot, entry), path.join(installDir, entry), { recursive: true });
+      }
+      assertNoNodeModulesInAncestry(installDir);
 
-      assert.ifError(result.error);
-      assert.strictEqual(result.signal, null);
-      assert.strictEqual(result.status, 0, result.stderr);
-      assert.ok(result.stdout.trim(), 'Expected SessionStart to emit a payload');
-      const output = JSON.parse(result.stdout);
-      assert.strictEqual(output.hookSpecificOutput?.hookEventName, 'SessionStart');
+      const result = runSessionStartHook(installDir);
+      assertSessionStartPayload(result);
       assert.ok(
-        output.hookSpecificOutput?.additionalContext.includes(contextSentinel),
-        'Expected the enabled Qoder hook to inject isolated SessionStart context'
+        !result.stderr.includes('Cannot find module'),
+        `SessionStart must not require an uninstalled dependency: ${result.stderr}`
       );
     } finally {
-      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+      fs.rmSync(installDir, { recursive: true, force: true });
     }
   });
 }

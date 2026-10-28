@@ -53,9 +53,10 @@ function describeMissingDependencyError(error) {
 
   return (
     `Missing dependency '${moduleName}'. ECC's production dependencies aren't installed ` +
-    '(this happens when ECC was installed via the Claude Code plugin marketplace, which ' +
-    'clones the repo but never runs npm install). Run "npm install" from the ECC repo ' +
-    `root, or install just this package with "${installCommand}".`
+    '(this happens for plugin installs: the Claude Code marketplace clones the repo but ' +
+    'never runs npm install, and the Qoder plugin cache copies the plugin without ' +
+    'node_modules). Run "npm install" from the ECC repo root, or install just this ' +
+    `package with "${installCommand}".`
   );
 }
 

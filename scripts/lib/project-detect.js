@@ -9,7 +9,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const yaml = require('js-yaml');
 
 /**
  * Language detection rules.
@@ -339,6 +338,25 @@ function getElixirDeps(projectDir) {
   }
 }
 
+// js-yaml is a production dependency, but plugin installs copy this file
+// without node_modules (the Qoder plugin cache strips it, a Claude Code
+// marketplace clone never runs npm install). Requiring it at load time made
+// every SessionStart hook die with MODULE_NOT_FOUND in those installs, so it is
+// resolved on first use instead. Without it only the Flutter SDK refinement in
+// hasFlutterSdkDependency is skipped; everything else still detects.
+let _yaml;
+
+function loadYaml() {
+  if (_yaml === undefined) {
+    try {
+      _yaml = require('js-yaml');
+    } catch {
+      _yaml = null;
+    }
+  }
+  return _yaml;
+}
+
 /**
  * Check whether pubspec.yaml declares the Flutter SDK as a dependency,
  * which distinguishes a Flutter app from a plain Dart package.
@@ -349,6 +367,8 @@ function hasFlutterSdkDependency(projectDir) {
   try {
     const pubspecPath = path.join(projectDir, 'pubspec.yaml');
     if (!fs.existsSync(pubspecPath)) return false;
+    const yaml = loadYaml();
+    if (!yaml) return false;
     const content = fs.readFileSync(pubspecPath, 'utf8');
     const pubspec = yaml.load(content, { schema: yaml.JSON_SCHEMA });
     // Only a declared Flutter SDK dependency identifies the framework.

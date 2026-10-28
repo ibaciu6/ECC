@@ -401,6 +401,12 @@ For Qoder IDE, upload a ZIP of the repository root. The ZIP root must contain
 `scripts/`, and `.mcp.json`; uploading only the manifest directory or one
 `SKILL.md` omits required resources.
 
+Qoder installs a plugin as a copy with `.git` and `node_modules` excluded, so
+the SessionStart bootstrap must not require ECC's production dependencies at
+load time. `tests/qoder-plugin.test.js` runs the declared hook against exactly
+that shape of copy to keep it working; a dependency-free hook graph is a
+contract of this integration, not an accident.
+
 The universal Node.js 18+ requirement applies to Qoder's non-interactive hook
 environment. The MCP server also requires `npx` and network access on first use.
 Qoder receives one reviewed, cross-platform `SessionStart` bootstrap using

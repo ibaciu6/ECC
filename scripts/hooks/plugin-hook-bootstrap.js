@@ -5,6 +5,7 @@ const path = require('path');
 const { StringDecoder } = require('string_decoder');
 const { spawnSync } = require('child_process');
 const { ensureAgentDataHomeEnv } = require('../lib/agent-data-home');
+const { describeMissingDependencyError } = require('../lib/missing-dependency');
 const { normalizePluginRootForPlatform } = require('../lib/resolve-ecc-root');
 const { resolveWindowsBashCandidates } = require('../lib/windows-bash');
 const { readStdinRaw: readBoundedStdin, resolveMaxStdin } = require('./hook-input');
@@ -73,6 +74,20 @@ function passthrough(result) {
   if (!Number.isInteger(result?.status) || result.status === 0) {
     writeStderr('[Hook] bootstrap: hook produced no output; emitting empty stdout\n');
   }
+}
+
+// A plugin install that copies files without node_modules (Qoder's plugin
+// cache strips it; a Claude Code marketplace clone never runs npm install)
+// makes the child hook die with a Node stack trace. Replace it with the same
+// actionable hint the CLI entry points give, and let the session start.
+function missingDependencyHint(stderr) {
+  const text = Buffer.isBuffer(stderr) ? stderr.toString('utf8') : String(stderr || '');
+  const match = /Cannot find module '([^']+)'/.exec(text);
+  if (!match) return null;
+  return describeMissingDependencyError({
+    code: 'MODULE_NOT_FOUND',
+    message: `Cannot find module '${match[1]}'`,
+  });
 }
 
 function resolveTarget(rootDir, relPath) {
@@ -294,6 +309,13 @@ async function main() {
     }
   } catch (error) {
     writeStderr(`[Hook] bootstrap resolution failed: ${error.message}; emitting empty stdout\n`);
+    process.exitCode = 0;
+    return;
+  }
+
+  const missingDependency = missingDependencyHint(result.stderr);
+  if (missingDependency) {
+    writeStderr(`[Hook] ${missingDependency}\n`);
     process.exitCode = 0;
     return;
   }

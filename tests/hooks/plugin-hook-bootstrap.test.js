@@ -327,6 +327,32 @@ process.exit(7);
     }
   })) passed++; else failed++;
 
+  // A plugin copy without node_modules (Qoder's plugin cache excludes it) used
+  // to leak a Node stack trace into the session and fail the hook.
+  if (test('node mode replaces a missing production dependency with an actionable hint', () => {
+    const root = createTempDir();
+    try {
+      writeFile(root, 'package.json', JSON.stringify({
+        name: 'ecc-fixture',
+        dependencies: { 'js-yaml': '^4.1.0' },
+      }));
+      writeFile(root, path.join('scripts', 'needs-yaml.js'), "require('js-yaml');\n");
+
+      const result = run(['node', path.join('scripts', 'needs-yaml.js')], {
+        root,
+        input: 'raw-input',
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(result.stdout, '');
+      assert.ok(result.stderr.includes("Missing dependency 'js-yaml'"), result.stderr);
+      assert.ok(result.stderr.includes('npm install --no-save js-yaml@'), result.stderr);
+      assert.ok(!result.stderr.includes('Require stack'), `raw stack trace leaked: ${result.stderr}`);
+    } finally {
+      cleanup(root);
+    }
+  })) passed++; else failed++;
+
   // Windows-only: PowerShell preference and .sh fallback behaviour.
   if (process.platform === 'win32') {
     const psProbe = spawnSync('pwsh.exe', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { stdio: 'ignore', timeout: 5000 });
