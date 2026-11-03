@@ -180,46 +180,24 @@ function isOpenCodePluginEntrypoint(operation = {}) {
   return getOpenCodeSourceActivationKind(operation) === 'plugin';
 }
 
-function getDisabledOpenCodePluginContent(sourceRelativePath = '.opencode/plugins/index.ts') {
+function getDisabledOpenCodePluginContent() {
   // OpenCode discovers plugins independently of opencode.json registration.
   // Do not import the original module: even module initialization has effects.
-  //
-  // The placeholder has to satisfy both supported contracts: OpenCode 1.18.29+
-  // reads `server`, while OpenCode 2 reads `setup` and refuses a bare function
-  // default export. OpenCode 2 also refuses duplicate plugin ids across the
-  // files it auto-discovers, so the id is derived from the entrypoint's path
-  // inside `plugins/`: two entrypoints can share a basename
-  // (`plugins/index.ts` and `plugins/custom/index.js`) while remaining distinct
-  // plugins, and a basename-derived id made the second one collide. Slicing at
-  // the last `plugins/` segment keeps the source path, the compiled `dist/`
-  // path and a destination path naming the same entrypoint on the same id.
-  const relative = normalizeOperationPath(sourceRelativePath);
-  // Use the last `plugins/` segment so paths outside the repo tree cannot
-  // steal a shorter prefix and so `/home/u/plugins/work/.../plugins/index.ts`
-  // still maps to the same id as `.opencode/plugins/index.ts`.
-  const parts = relative.split('/plugins/');
-  const withinPlugins = parts.length > 1 ? parts[parts.length - 1] : relative;
-  const withoutExt = String(withinPlugins || '').replace(/\.[^.]+$/, '');
-  // Path segments are joined with `_`, so a separator in
-  // `plugins/custom/index.js` must not collide with a literal separator in a
-  // filename such as `plugins/custom-index.js` or `plugins/custom--index.js`:
-  // every existing `_` in a segment is doubled first, which keeps
-  // `custom/index`, `custom_index`, `custom-index` and `custom--index` apart
-  // while leaving `plugins/index.ts` and `plugins/custom/index.js` distinct.
-  const stem = withoutExt
-    .replace(/_/g, '__')
-    .replace(/\\/g, '_')
-    .replace(/\//g, '_')
-    .replace(/[^A-Za-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'plugin';
-  return [
-    'export default {',
-    `  id: "ecc.disabled.${stem}",`,
-    '  server: async () => ({}),',
-    '  setup: () => {},',
-    '};',
-    '',
-  ].join('\n');
+  // The stub must still satisfy the V2 loader schema: the default export has to
+  // be a definition object with an id and an effect or setup function. A factory
+  // (`export default async () => ({})`) is rejected at startup with
+  // PluginModule.LoadError / SchemaError(Expected object at ["default"]), which
+  // is the same failure reported for the V1 hook plugin in issue #3537.
+  return 'export default { id: "ecc-hooks", setup() {} };\n';
+}
+
+// Installs made before the V2 stub fix wrote this stub. It is inert either way;
+// the V2 loader merely rejects it.
+const LEGACY_DISABLED_OPENCODE_PLUGIN_CONTENT = 'export default async () => ({});\n';
+
+function isInertOpenCodePluginStub(content) {
+  const text = content.toString('utf8');
+  return text === getDisabledOpenCodePluginContent() || text === LEGACY_DISABLED_OPENCODE_PLUGIN_CONTENT;
 }
 
 function isOpenCodeHookActivationOperation(operation = {}) {
@@ -459,6 +437,7 @@ module.exports = {
   disableOpenCodeHookPluginRegistration,
   parseJsoncConfig,
   getDisabledOpenCodePluginContent,
+  isInertOpenCodePluginStub,
   getOpenCodeActivationPathKind,
   getOpenCodeSourceActivationKind,
   formatHookCapabilityDisclosure,

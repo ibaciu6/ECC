@@ -18,7 +18,6 @@ const {
 } = require('../../scripts/lib/install-lifecycle');
 const { applyInstallPlan } = require('../../scripts/lib/install/apply');
 const { createInstallPlanFromRequest } = require('../../scripts/lib/install/runtime');
-const { getDisabledOpenCodePluginContent } = require('../../scripts/lib/install/hook-consent');
 const { getInstallTargetAdapter } = require('../../scripts/lib/install-targets/registry');
 const {
   createInstallState,
@@ -30,6 +29,7 @@ const {
   materializeManagedHooks,
 } = require('../../scripts/lib/install/claude-settings');
 const { readHooksConfig } = require('../../scripts/lib/hooks-config');
+const { getDisabledOpenCodePluginContent } = require('../../scripts/lib/install/hook-consent');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const CURRENT_PACKAGE_VERSION = JSON.parse(
@@ -2047,11 +2047,9 @@ function runTests() {
           exemptValidationCodes: ['opencode-plugin-not-built'],
         });
         applyInstallPlan(plan);
-        const pluginNames = ['ecc-hooks.ts', 'index.ts'];
-        const pluginPaths = pluginNames.map(name => path.join(plan.targetRoot, 'plugins', name));
-        for (const name of pluginNames) {
-          const pluginPath = path.join(plan.targetRoot, 'plugins', name);
-          assert.strictEqual(fs.readFileSync(pluginPath, 'utf8'), getDisabledOpenCodePluginContent(name));
+        const pluginPaths = ['ecc-hooks.ts', 'index.ts'].map(name => path.join(plan.targetRoot, 'plugins', name));
+        for (const pluginPath of pluginPaths) {
+          assert.strictEqual(fs.readFileSync(pluginPath, 'utf8'), getDisabledOpenCodePluginContent());
           fs.unlinkSync(pluginPath);
         }
         const before = buildDoctorReport({ repoRoot: REPO_ROOT, homeDir, projectRoot: homeDir, targets: ['opencode'] });
@@ -2069,9 +2067,8 @@ function runTests() {
         });
         assert.strictEqual(buildCalls, 1, 'Only the injected inert builder is used');
         assert.strictEqual(repaired.results[0].status, 'repaired');
-        for (const name of pluginNames) {
-          const pluginPath = path.join(plan.targetRoot, 'plugins', name);
-          assert.strictEqual(fs.readFileSync(pluginPath, 'utf8'), getDisabledOpenCodePluginContent(name));
+        for (const pluginPath of pluginPaths) {
+          assert.strictEqual(fs.readFileSync(pluginPath, 'utf8'), getDisabledOpenCodePluginContent());
         }
         const state = readInstallState(plan.installStatePath);
         assert.strictEqual(state.request.hookConsent, 'declined');
@@ -2105,10 +2102,7 @@ function runTests() {
         });
         assert.strictEqual(result.results[0].status, 'repaired');
         for (const name of ['ecc-hooks.ts', 'index.ts']) {
-          assert.strictEqual(
-            fs.readFileSync(path.join(recorded.targetRoot, 'plugins', name), 'utf8'),
-            getDisabledOpenCodePluginContent(name)
-          );
+          assert.strictEqual(fs.readFileSync(path.join(recorded.targetRoot, 'plugins', name), 'utf8'), getDisabledOpenCodePluginContent());
         }
         assert.ok(!JSON.parse(fs.readFileSync(path.join(recorded.targetRoot, 'opencode.json'), 'utf8')).plugin.includes('./plugins'));
         const state = readInstallState(recorded.installStatePath);
