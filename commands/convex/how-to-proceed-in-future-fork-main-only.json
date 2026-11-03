@@ -1,0 +1,8 @@
+{
+  "name": "Convex: how to proceed in future, fork main only",
+  "trigger": "Convex: how to proceed in future, fork main only",
+  "when": {
+    "matchesStatement": "Convex: how to proceed in future, fork main only"
+  },
+  "response": "Read guidance/fork-main-workflow.md and follow that fork-main-first rule. Upstream is used only as an update source. Maintain fork/main, then stack custom changes on top."
+}
